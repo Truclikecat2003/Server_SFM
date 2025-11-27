@@ -41,6 +41,27 @@ connectDB();
 // Route test server
 app.get('/', (req, res) => res.send('Server is running'));
 
+// Route kiểm tra sức khoẻ server + MongoDB
+app.get('/health', async (req, res) => {
+  try {
+    // Ping để kiểm tra MongoDB có hoạt động không
+    await db.command({ ping: 1 });
+
+    res.json({
+      status: "OK",
+      database: "Connected",
+      uptime: process.uptime(),
+      timestamp: new Date()
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: "ERROR",
+      database: "Disconnected",
+      error: error.message
+    });
+  }
+});
+
 // Thêm document vào collection
 app.post('/add', async (req, res) => {
   try {
