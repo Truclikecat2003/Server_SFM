@@ -4,6 +4,19 @@ const cors = require('cors');
 const { MongoClient, ServerApiVersion } = require('mongodb');
 const xss = require('xss');
 
+// ===== PQC SIGNATURE (SERVER) =====
+const { dilithium2 } = require("pqcrypto/sign");
+
+// Tạo keypair 1 lần khi server chạy
+const PQC_KEYPAIR = dilithium2.keyPair();
+
+function pqcSign(msg) {
+  const buffer = Buffer.from(msg);
+  const signature = dilithium2.sign(buffer, PQC_KEYPAIR.secretKey);
+  return signature.toString("base64");
+}
+
+// ===== EXPRESS =====
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -41,7 +54,7 @@ let isConnected = false;
 async function connectDB() {
   try {
     await client.connect();
-    db = client.db("SecurityForMe"); // tên database m đang dùng
+    db = client.db("SecurityForMe");
     await db.command({ ping: 1 });
     isConnected = true;
     console.log("✅ MongoDB connected!");
@@ -53,22 +66,33 @@ async function connectDB() {
 connectDB();
 
 // ========================
+//  API PQC (hậu lượng tử)
+// ========================
+app.post("/pqc-sign", (req, res) => {
+  const msg = req.body.message || "";
+  const signature = pqcSign(msg);
+
+  res.json({
+    status: "OK",
+    signature,
+    publicKey: PQC_KEYPAIR.publicKey.toString("base64"),
+  });
+});
+
+// ========================
 //  API CHỐNG XSS + CSRF + LƯU MONGO
 // ========================
 app.post('/safe-insert', async (req, res) => {
   try {
-    // 1) Kiểm tra CSRF
     if (!req.body.csrfToken || req.body.csrfToken !== SERVER_CSRF_TOKEN) {
       return res.status(403).json({ error: "Invalid CSRF Token" });
     }
 
-    // 2) Lọc XSS
     const cleaned = {};
     for (let key in req.body.data) {
       cleaned[key] = xss(req.body.data[key]);
     }
 
-    // 3) Lưu MongoDB
     const result = await db.collection("safeCollection").insertOne(cleaned);
 
     res.json({
@@ -83,26 +107,20 @@ app.post('/safe-insert', async (req, res) => {
 });
 
 // ========================
-//  HEALTH: KIỂM TRA BẢO MẬT + DB
+//  HEALTH CHECK
 // ========================
 app.get('/health', async (req, res) => {
 
   const securityStatus = {
-    mongo: "unknown",
+    mongo: isConnected ? "connected" : "disconnected",
     csrf: "enabled",
     xss: "enabled",
+    pqc: "enabled",
     csrfToken: SERVER_CSRF_TOKEN ? "active" : "missing",
   };
 
-  try {
-    await db.command({ ping: 1 });
-    securityStatus.mongo = "connected";
-  } catch {
-    securityStatus.mongo = "disconnected";
-  }
-
   res.json({
-    status: securityStatus.mongo === "connected" ? "OK" : "FAIL",
+    status: isConnected ? "OK" : "FAIL",
     security: securityStatus
   });
 });
@@ -111,7 +129,7 @@ app.get('/health', async (req, res) => {
 //  ROUTE GỐC
 // ========================
 app.get('/', (req, res) => {
-  res.send('Server running with XSS + CSRF Protection');
+  res.send('Server running with XSS + CSRF + PQC Protection');
 });
 
 const port = process.env.PORT || 5000;
